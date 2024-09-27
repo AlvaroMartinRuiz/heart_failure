@@ -1,0 +1,1279 @@
+---
+title: "HW2 Alvaro Martin"
+output:
+  html_document:
+    df_print: paged
+---
+Alvaro Martin
+196
+100475318
+
+## Explanation of the dataset
+Heart failure is a common event caused by CVDs (cardio vascular diseases) and this dataset contains 11 features that can be used to predict a possible heart disease.
+We also want to find the most important variables affecting our variable of interest.
+
+ Data set contains the following information:
+ 
+ 1. Age: age of the patient [years]
+ 
+ 2. Sex: sex of the patient [M: Male, F: Female]
+ 
+ 3. ChestPainType: chest pain type [TA: Typical Angina, 
+ ATA: Atypical Angina, NAP: Non-Anginal Pain, ASY: Asymptomatic]
+ 
+ 4. RestingBP: resting blood pressure [mm Hg]
+ 
+ 5. Cholesterol: serum cholesterol [mm/dl]
+ 
+ 6. FastingBS: fasting blood sugar [1: if FastingBS > 120 mg/dl,    0:otherwise]
+ 7. RestingECG: resting electrocardiogram results [Normal: Normal, 
+ ST: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of > 0.05 mV), LVH: showing probable or definite left ventricular hypertrophy by Estes' criteria]
+ 8. MaxHR: maximum heart rate achieved [Numeric value between 60 and 202]
+ 9. ExerciseAngina: exercise-induced angina [Y: Yes, N: No]
+ 10. Oldpeak: oldpeak = ST [Numeric value measured in depression]
+ 11. ST_Slope: the slope of the peak exercise ST segment [Up: upsloping, Flat: flat, Down: downsloping]
+ 12. HeartDisease: output class [1: heart disease, 0: Normal]
+
+*GOAL:* Our goal is to predict HeartDisease (classification) and a numeric variable that we will create to meassure the patient helthiness (regression) with the information of the rest of the variables.
+
+
+
+First of all, let's load the data and the libraries needed.
+```{r}
+library(GGally)
+library(ggplot2)
+library(caret)
+
+if (!require("ggridges")){
+  install.packages("ggridges")
+}
+library(ggridges)
+if (!require("viridis")){
+  install.packages("viridis")
+}
+library(viridis)
+if (!require("hrbrthemes")){
+  install.packages("hrbrthemes")
+}
+library(hrbrthemes)
+if (!require("ggExtra")){
+  install.packages("ggExtra")
+}
+library(ggExtra)
+if (!require("gridExtra")){
+  install.packages('gridExtra')
+}
+library(gridExtra)
+
+library(mice)
+library(VIM)
+library(Amelia)
+library(RANN)
+library(caTools)
+library(glmnet)
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(olsrr)
+
+set.seed(123)
+rm(list=ls())
+heart_data = read.csv('heart.csv')
+```
+
+Let's have a look at the data and see what are the different variables:
+```{r}
+head(heart_data)
+str(heart_data)
+summary(heart_data)
+```
+
+
+## Preprocessing and visualization
+As we saw that we have some categorical variables, let's convert them into factors
+```{r}
+heart_data$Sex = as.factor(heart_data$Sex)
+heart_data$ChestPainType = as.factor(heart_data$ChestPainType)
+heart_data$FastingBS=factor(heart_data$FastingBS,levels=c(1,0))
+heart_data$ExerciseAngina = as.factor(heart_data$ExerciseAngina)
+heart_data$ST_Slope = as.factor(heart_data$ST_Slope)
+heart_data$HeartDisease = factor(heart_data$HeartDisease,labels=c("Disease","Not_disease"),levels=c(1,0))
+heart_data$RestingECG = as.factor(heart_data$RestingECG)
+
+```
+
+Now let's move to the numerical variables. How are they related?
+```{r}
+library(GGally)
+ggcorr(heart_data, label = T)
+# It is not our case, but in the case that some of our variables were highly correlated, it would be a good idea to do PCA to reduce the dimensionality of our dataset
+```
+
+**OUTLIERS**
+
+We only have to care about the continuous variabes, that are the one which may have outliers in this case
+```{r}
+# Let's identify the outliers
+par(mfrow=c(1,5)) # 5 figures arranged in 1 row and 5 columns
+boxplot(heart_data$Age,ylab = "Age", col='red')
+boxplot(heart_data$RestingBP, ylab = "Resting BP", col = 'lightblue') 
+# We have outliers
+boxplot(heart_data$Cholesterol,ylab = "Cholesterol", col = 'green') 
+# Outliers
+boxplot(heart_data$MaxHR,ylab = "MaxHR", col = 'darkblue')
+# A few outliers
+boxplot(heart_data$Oldpeak,ylab = "Oldpeak", col ='lightgreen') 
+# Outliers
+```
+
+
+```{r}
+# Identification by IQR:
+QI <- quantile(heart_data$Age, 0.25, na.rm = TRUE)
+QS <- quantile(heart_data$Age, 0.75, na.rm = TRUE)
+IQR = QS-QI
+
+sum(heart_data$Age < QI - 1.5*IQR | heart_data$Age > QS + 1.5*IQR, na.rm = TRUE)
+# No outliers in variable Age
+
+QI <- quantile(heart_data$RestingBP, 0.25, na.rm = TRUE)
+QS <- quantile(heart_data$RestingBP, 0.75, na.rm = TRUE)
+IQR = QS-QI
+
+sum(heart_data$RestingBP < QI - 1.5*IQR | heart_data$RestingBP > QS + 1.5*IQR, na.rm = TRUE)
+# 28 outliers
+
+QI <- quantile(heart_data$Cholesterol, 0.25, na.rm = TRUE)
+QS <- quantile(heart_data$Cholesterol, 0.75, na.rm = TRUE)
+IQR = QS-QI
+
+sum(heart_data$Cholesterol < QI - 1.5*IQR | heart_data$Cholesterol > QS + 1.5*IQR, na.rm = TRUE)
+# 183 outliers. That is a lot. Later we will have a look at this variable to see what is happening to have so many outliers.
+
+QI <- quantile(heart_data$MaxHR, 0.25, na.rm = TRUE)
+QS <- quantile(heart_data$MaxHR, 0.75, na.rm = TRUE)
+IQR = QS-QI
+
+sum(heart_data$MaxHR < QI - 1.5*IQR | heart_data$MaxHR > QS + 1.5*IQR, na.rm = TRUE)
+# 2 outliers
+
+QI <- quantile(heart_data$Oldpeak, 0.25, na.rm = TRUE)
+QS <- quantile(heart_data$Oldpeak, 0.75, na.rm = TRUE)
+IQR = QS-QI
+
+sum(heart_data$Oldpeak < QI - 1.5*IQR | heart_data$Oldpeak > QS + 1.5*IQR, na.rm = TRUE)
+# 16 outliers
+
+# Before we decide what to do with the outliers, let's try another methods
+# to identify them and see if we get similar results as the ones obatined.  
+
+# Identification by the 3-sigma rule:
+mu <- mean(heart_data$Age, na.rm = TRUE)
+sigma <- sd(heart_data$Age, na.rm = TRUE)
+sum(heart_data$Age < mu - 3*sigma | heart_data$Age > mu + 3*sigma, na.rm = TRUE)
+# No outliers in Age
+
+mu <- mean(heart_data$RestingBP,na.rm = TRUE)
+sigma <- sd(heart_data$RestingBP, na.rm = TRUE)
+sum(heart_data$RestingBP < mu - 3*sigma | heart_data$RestingBP > mu + 3*sigma, na.rm = TRUE)
+# 8 outliers.
+
+mu <- mean(heart_data$Cholesterol,na.rm = TRUE) 
+sigma <- sd(heart_data$Cholesterol,na.rm = TRUE)
+sum(heart_data$Cholesterol < mu - 3*sigma | heart_data$Cholesterol > mu + 3*sigma, na.rm = TRUE )
+# 3 otuliers
+
+which(heart_data$Cholesterol > mu + 3*sigma)
+heart_data$Cholesterol[77]
+heart_data$Cholesterol[150]
+heart_data$Cholesterol[617]
+# Although this are extreme values, it is possible to have 
+# cholesterol at this levels:
+# https://www.clinicbarcelona.org/asistencia/enfermedades/hipercolesterolemia/evolucion-de-la-enfermedad
+
+mu <- mean(heart_data$MaxHR,  na.rm = TRUE)
+sigma <- sd(heart_data$MaxHR,  na.rm = TRUE)
+sum(heart_data$MaxHR < mu - 3*sigma | heart_data$MaxHR > mu + 3*sigma, na.rm = TRUE)
+# 1 outlier
+
+mu <- mean(heart_data$Oldpeak,  na.rm = TRUE)
+sigma <- sd(heart_data$Oldpeak,  na.rm = TRUE)
+sum(heart_data$Oldpeak < mu - 3*sigma | heart_data$Oldpeak > mu + 3*sigma,  na.rm = TRUE)
+# 7 outliers
+
+# With the 3 sigma identification method we have detected less outliers.
+```
+It always depends on the context to decide what to do with the outliers. Are they observations that we need to take into account? Do we have to remove the outliers? Are they 'absurd' observations?
+
+Let's see it now with the help of other graphs, visualizing the variables can help us to understand the variables better and see if the extreme values make sense or not.
+
+```{r}
+# Scatter plot of our numerical variables:
+featurePlot(x = heart_data[, c(1,4,8,10)], y = heart_data$Cholesterol,
+            plot = "scatter", layout = c(2, 2), labels = c("X-axis: Cholesterol", "Y axis: Other Numerical Variabes"))
+# We see that there are some values with cholesterol 0, let's have a deeper look
+ggplot(heart_data, aes(Cholesterol, na.rm =TRUE)) + 
+  geom_density(aes(group=Sex, colour=Sex, fill=Sex), alpha=0.1) + 
+  ggtitle("Cholesterol distribution")
+
+ggplot(heart_data)+aes(Cholesterol)+geom_histogram(bins = 30,fill = 'lightgreen')
+# Let's use a logarithmic scale to see clearer the gap
+ggplot(heart_data)+aes(log(Cholesterol+1))+geom_histogram(bins = 30,fill = 'lightgreen')
+```
+
+We see that there is a huge gap between 0 and the next value. Furthermore, a cholesterol of 0 does not make sense at all. 
+I have been doing some research and it is almost impossible to have 
+I am going to replace that observations with an NA, and later compute that value using knn.
+
+```{r}
+heart_data$Cholesterol[heart_data$Cholesterol==0] <- NA
+```
+
+Let's continue with the rest of the variables
+```{r}
+ggplot(heart_data, aes(RestingBP))+xlim(c(75,210)) + geom_density(fill="darkblue") 
+# The distribution is fine and the values make sense.
+
+# Age:
+ggplot(heart_data)+aes(x=Age)+geom_density()
+ggplot(heart_data)+aes(Age, fill = Sex)+geom_boxplot()
+# Age values are ok, we don't see anything extreme such as people of 120 years that we might think it is a wrong data.
+```
+
+
+```{r}
+# Let's continue with the maximum heart rate
+ggplot(heart_data, aes(x = MaxHR, y = Sex, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Temp. [F]", option = "C") +
+  labs(title = 'Maximum heart rate by sex') +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)
+  )
+
+# Against our variable of interest:
+ggplot(heart_data, aes(x = MaxHR, y = HeartDisease, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Temp. [F]", option = "C") +
+  labs(title = 'Maximum heart rate by Heart Disease') +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)
+  )
+# SO far, we don't see any outlier or any value that does not make sense.
+# We can start seeing some interesting relations, for example, from the last graph we may think that people with a lower maximum Heart Rate are more probable to have the disease.
+```
+```{r}
+# Distribution of oldpeak variable
+ggplot(heart_data)+aes(y= Oldpeak)+geom_histogram(bins = 20, fill = 'lightgreen')
+ggplot(heart_data, aes(x = HeartDisease, y=Oldpeak, fill = HeartDisease)) + # fill=name allow to automatically dedicate a color for each group
+  geom_violin()
+
+```
+Finally, I don't see any 'strange' value here, therefore I won't remove the outliers of this variable.
+
+In the end, I decided to leave the majority of the outliers. This is because I consider that they represent natural variations in the population (I also don't have many outliers, so we don't have a very noisy dataset neither). 
+
+I decided to removed onnly the *Cholesterol=0* outliers because they represent measurement errors.
+
+
+
+
+**MISSING VALUES**
+```{r}
+# MISSING VALUES:
+# How many missing values we have?
+length(which(is.na(heart_data)))
+
+# Almost all the missing values that I have are the ones that
+# we have seen on the cholesterol:
+colSums(is.na(heart_data))
+
+# As I have few missing values in the rest of the variables, I am going to add some more in order to complicate a bit more the preprocessing.
+for(i in 1:(ncol(heart_data)-1)){  # I don't want missing values on the dependent variable
+  for(j in 1:nrow(heart_data)){ 
+   if((i+j)%%100==0){  # Add an NA every 100 observations
+     heart_data[j,i]<-NA
+   }
+  }
+}
+  
+# What is now the percentage of NAs in our data?
+sum(is.na(heart_data))/(nrow(heart_data)*ncol(heart_data))*100
+# 2.48% of missing values
+
+# Where are the NAs?
+for(i in 1:ncol(heart_data)){
+  if(any(is.na(heart_data[,i]))){
+    cat("Variable ",names(heart_data)[i]," has NA values\n")
+  }
+}
+# Now we have mising values in all the variables.
+```
+
+
+```{r}
+# 3 different ways to visualize where are the NAs
+md.pattern(heart_data)
+# We see what we can expect, the majority of the observation with NA have
+# the missing value on the cholesterol variable, and the rest of NAs
+# are distributed in the rest of the variables.
+
+# Now we are going to see more in detail how the missing values are 
+# distributed in our dataset:
+summary(aggr(heart_data))
+# We see that the variable cholesterol has the majority of the NAs
+missmap(heart_data, main = "Missing Values", col = c("pink", "snow2"))
+```
+
+Now let's impute the NAs:
+```{r}
+# Replacing the NAs by knn imputation:
+preProcess_missingdata <- preProcess(heart_data, method='knnImpute')
+data1 <- predict(preProcess_missingdata, newdata = heart_data)
+
+anyNA(data1)
+sum(is.na(data1))
+```
+
+We still have over 50 NAs. This is because it does not find any neighbor (cluster) near enough to assign a value.
+Therefore, we will replace the Nas left using multiple imputation (mice).
+
+```{r}
+for(i in 1:ncol(data1)){
+  if(any(is.na(data1[,i]))){
+    cat("Variable ",names(data1)[i]," has NA values\n")
+  }
+}
+
+# Finally, we need to replace the missing values left. 
+# To do this we are going to use Multiple Imputation:
+md.pattern(data1)
+vec1 <- c()
+for(i in 1:ncol(data1)){
+  if(any(is.na(data1[,i]))){
+    vec1 <- c(vec1,i)
+  }
+}
+
+
+imp=mice(data1[,vec1], method = 'rf')
+
+
+data_imp=mice::complete(imp)
+data <- data1
+data$Sex = data_imp$Sex
+data$ChestPainType =data_imp$ChestPainType
+data$FastingBS = data_imp$FastingBS
+data$RestingECG = data_imp$RestingECG
+data$ExerciseAngina = data_imp$ExerciseAngina
+data$ST_Slope = data_imp$ST_Slope
+
+sum(is.na(data))
+# We don't have any NA in our dataset.
+
+```
+
+
+
+
+
+
+
+
+
+
+Now let's make some more graphs to have more insights about the data. We will do some graphs involving different variables to better understand the relation between them.
+```{r}
+ggplot(heart_data)+aes(Sex, fill = Sex)+geom_bar()+coord_flip()
+
+# Let's see the distribution of the ChestPainType variable with a doughnut chart
+# Source: https://r-graph-gallery.com/
+
+df_aux<- data.frame(table(heart_data$ChestPainType))
+df <- data.frame(
+  category=df_aux$Var1,
+  count=df_aux$Freq
+)
+# Compute percentages
+df$fraction = df$count / sum(df$count)
+# Compute the cumulative percentages (top of each rectangle)
+df$ymax = cumsum(df$fraction)
+# Compute the bottom of each rectangle
+df$ymin = c(0, head(df$ymax, n=-1))
+# Make the plot
+ggplot(df, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=category)) +
+  geom_rect() +
+  coord_polar(theta="y") + # Try to remove that to understand how the chart is built initially
+  xlim("")+ggtitle("Chest Pain Type")
+```
+
+```{r}
+ggplot(data, aes(x=HeartDisease,fill = Sex)) + geom_bar() 
+ggplot(data, aes(x=HeartDisease,fill = RestingECG)) + geom_bar()
+ggplot(data) +aes(x=RestingBP) + geom_histogram(aes(y=..density..),bins=20,color="white") + 
+  geom_density(color="white",fill="lightblue",alpha=0.7)
+```
+
+```{r}
+p<- ggplot(data, aes(x=Age, y=Cholesterol, color=HeartDisease)) +
+      geom_point() +
+      theme(legend.position="bottom")
+ggMarginal(p, type="histogram")
+# It seems that the level of cholesterol is independent of the age.
+
+p<- ggplot(data, aes(x=MaxHR, y=Oldpeak, color=HeartDisease)) +
+      geom_point() +
+      theme(legend.position="bottom")
+ggMarginal(p, type="density")
+
+
+g1 <- ggplot(data,aes(FastingBS, fill=HeartDisease))+geom_bar()+theme(legend.position = 'bottom')
+g2 <- ggplot(data,aes(RestingECG, fill=HeartDisease))+geom_bar()+theme(legend.position = 'bottom')
+g3 <- ggplot(data,aes(ExerciseAngina, fill=HeartDisease))+geom_bar()+theme(legend.position = 'bottom')
+g4 <- ggplot(data,aes(ST_Slope, fill=HeartDisease))+geom_bar()+theme(legend.position = 'bottom')
+grid.arrange(arrangeGrob(g1, g2, ncol=2), arrangeGrob(g3, g4, ncol=2), nrow = 2)
+
+```
+
+
+
+## CLASIFICATION
+The first thing we have to do is to split our data between training and testing set:
+```{r}
+split = sample.split(data$HeartDisease, SplitRatio = 0.8)
+# With this function we get a boolean vector with the same length as the variable HeartDisease. We will include in the training set the observations in the vector that are TRUE.
+training = subset(data, split == TRUE)
+testing = subset(data, split == FALSE)
+# 80% of the data is now in the training set
+
+# Another option to split the data would be:
+# in_train <- createDataPartition(heart_data$HeartDisease, p = 0.8, list = FALSE)  # 80% for training
+# training1 <- heart_data[ in_train,]
+# testing1 <- heart_data[-in_train,]
+```
+
+Is our variable of interest balanced?
+```{r}
+table(training$HeartDisease)
+barplot(prop.table(table(training$HeartDisease)) * 100, 
+        main = "Relative frequency (%)",col = rainbow(3))
+# Yes, it is pretty balanced
+```
+
+### Binary logistic regression
+As in logistic regression the predictors can be either continuous or 
+categorical, we can perfectly use all our data to predict whether the person has a Heart Disease or not.
+```{r}
+logit.model <- glm(HeartDisease ~ ., family=binomial(link='logit'), data=training)
+summary(logit.model)
+# With this model, we can compute the posterior probabilities:
+# Probability of NOT Disease given the value of the predictors.
+
+probability <- predict(logit.model,newdata=testing, type='response')
+head(probability)
+# Person 3 has a posterior probability of 90% (of not having Disease)
+# Person 4 has a posterior probability of 20% (of not having Disease),
+# this means that we are going to predict this person as Disease.
+```
+
+
+If the posterior probability is higher than 0.5, we consider that the person is healthy, and if it is less it will be predicted as Disease (as the Heart Disease variable is more or less balanced, this will work fine).
+```{r}
+prediction <- as.factor(ifelse(probability > 0.5,"Not_disease","Disease"))
+head(prediction)
+
+# Let's now evaluate the performance of our model:
+confusionMatrix(prediction, testing$HeartDisease)
+
+```
+
+## Penalized logistic regression
+To avoid overfitting (when we are fitting an over complicated variable to our data, this is, when we have tons of variables), the solution is to penalize. 
+ Without any penalty, the goal of our model is just to reduce the error (distance between the model and the observations).
+ Penalized regression adds a term for model complexity to the error that the regression algorithm tries to minimize (MSE, R2...). 
+ 
+We reduce variance at the cost of increment bias.
+
+```{r}
+# Let's do penalized regression, but let's find the best possible one.
+# In order to do this, we are going to try with different methods and 
+# different values of lambda.
+ctrl <- trainControl(method = "cv", number = 5,
+                     classProbs = TRUE, 
+                     verboseIter=T)
+
+lrFit <- train(HeartDisease ~ ., 
+               method = "glmnet",
+               tuneGrid = expand.grid(alpha = seq(0, 1, 0.1), lambda = seq(0, .1, 0.01)),
+               metric = "Kappa",  
+               # lrfit is going to select the combination
+               # of hyperparameters that maximize the Kappa statistic
+               data = training,
+               trControl = ctrl)
+print(lrFit)
+lrPred = predict(lrFit, testing)
+```
+
+The results are:
+```{r}
+# The best hyperparameters are:
+lrFit$results$alpha[which.max(lrFit$results$Kappa)]
+lrFit$results$lambda[which.max(lrFit$results$Kappa)]
+# Which is the same as:
+lrFit$bestTune
+
+# The best accuracy is given by:
+lrFit$results$alpha[which.max(lrFit$results$Accuracy)]
+lrFit$results$lambda[which.max(lrFit$results$Accuracy)]
+# The best accuracy is also achieved by the hyperparameters with higher kappa.
+
+confusionMatrix(lrPred, testing$HeartDisease)
+# Kappa 0.78 creo que está bastnate bien
+# The results we get are practically the same as what we got with 
+# non-penalized logistic regression.
+
+```
+
+**ROC curve**
+ The ROC curve compares false positives rates with true positives.
+ ROC curve shows true positives vs false positives in relation with different thresholds.
+
+```{r}
+# We are inerested in minimizing false negatives
+lrProb = predict(lrFit, testing, type="prob")
+
+plot.roc(testing$HeartDisease, lrProb[,2],col="darkblue", print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+         grid.col=c("green", "red"), max.auc.polygon=TRUE,
+         auc.polygon.col="lightblue", print.thres=TRUE,  levels=c("Not_disease", "Disease"))
+```
+
+The recommended threshold is 0.514 ,which is very near to the 0.5 that we previously chose (this is because our classes are balanced). 
+This is the threshold with the best balance between sensitivity and specificity (the nearest to the top left corner of the chart)
+Our area under the curve is really really good: 0.95 
+
+What We have found the threshold with the higher sentisitivity-especificity ratio. But for us, the sensitivity is more important than the specifity (remember that the higher sensitivity, the lower specificity), since it is consider that it is worse predicting as healthy someone with a disease than having a false positive (predicting as ill someone healthy).
+
+*Which is the best model?*
+The importance of the specificity depends on the disease. 
+For a person with cancer who need an urgent treatment, sensivility is more important. However, in a terminal disease specificity is more relevatn, since starting the treatment in a healthy person could be worse than not treating someone ill. 
+
+But in general, a medical diagnose is considergood if the excellent if it has a sensitivity >95% and a specificity higher than 80%.
+Therefore, we will choose the model with the higher specificity among those with a sensitivity >95%.
+
+Fuentes: 
+https://lafisioterapia.net/sensibilidad-especificidad/
+https://www.sergas.es/Saude-publica/Documents/1932/6-Ayuda%20Pruebas%20diagnsticas.pdf
+https://docs.bvsalud.org/biblioref/2018/05/883697/importancia-calculo-sensibilidad-y-especifidad.pdf
+
+
+```{r}
+# In order to have a high sensitivity and still have a good specificity, we have to look in the table of the values of the toc curve.
+a <- plot.roc(testing$HeartDisease, lrProb[,2],col="darkblue", 
+              print.auc = TRUE,  auc.polygon=TRUE, grid=c(0.1, 0.2),
+              grid.col=c("green", "red"), max.auc.polygon=TRUE,
+              auc.polygon.col="lightblue", print.thres=TRUE,
+              levels=c("Not_disease", "Disease"))
+dfprueba <- data.frame(a$sensitivities, a$specificities, a$thresholds)
+
+
+which.max(dfprueba$a.specificities[dfprueba$a.sensitivities>=0.95]) 
+# threshold 73
+best_threshold<- dfprueba$a.thresholds[which.max(dfprueba$a.specificities[dfprueba$a.sensitivities>=0.95])]
+best_threshold
+# We see that it is the same as before. So this means that this is not onnly the threshold with the best sensitivity-specificity relation, but also the one with a higher specificity among those with >95% specificity.
+```
+Let's now use this threshold to predict
+```{r}
+threshold = best_threshold
+lrProb = predict(lrFit, testing, type="prob")
+lrPred = rep("Disease", nrow(testing))
+lrPred[which(lrProb[,2] > threshold)] = "Not_disease"
+confusionMatrix(factor(lrPred), testing$HeartDisease)
+# Accuracy : 0.9022 
+# Kappa : 0.7996         
+# Sensitivity : 0.9608         
+# Specificity : 0.8293
+
+# As the threshold is alsmost the same as before, the results are very
+# similar (and quite good in my opinion)
+
+```
+
+## Decision trees
+```{r}
+# Hyper-parameters
+control = rpart.control(minsplit = 30, maxdepth = 10, cp=0.01)
+# minsplit: minimum number of observations in a node before before a split
+# maxdepth: maximum depth of any node of the final tree
+# cp: degree of complexity, the smaller the more branches
+
+
+model = HeartDisease ~.
+dtFit <- rpart(model, data=training, method = "class", control = control)
+summary(dtFit)
+```
+
+Let's plot it to see it clearer:
+```{r}
+library(rpart.plot)
+rpart.plot(dtFit, digits=3)
+
+# We can change some things to make the plot more visual:
+prp(dtFit,type=2,extra=106,nn=TRUE,shadow.col="blue",
+    digits=2, roundint=FALSE)
+```
+ 
+ The decision tree can be interpreted as if we were meaking yes/no questions and classificating the patients depending on their answers. 
+ In this case, the first question would be if the patient has the slope of the peaks exercise ST segment (variable ST_Slope) either down or flat. If the answers was yes (ST_Slope is Down or Flat) we would predict
+ that the person has a disease. The successives divisions of the 
+ tree are more "questions" in order to predict better. Each branch of 
+ the tree defines a group of person that would be classify in a certain
+ way. For instance, in this case people with ST_Slope = Up and  ChestPainType different from asympotomatic (ASY) will be predicted as healthy.
+
+
+
+Now let's see which are the variables that contribute the most to the 
+decision tree (in general, the variables nearer to the root are the more important)
+```{r}
+# Variable importance:
+dtFit$variable.importance
+plot(dtFit$variable.importance,
+       xaxt="n",
+       xlab="Variable",ylab="Importance")
+title("Variable importance")
+axis(side=1, 
+     at=seq(1, length(dtFit$variable.importance), by=1),
+     labels = names(dtFit$variable.importance),)
+grid()
+# The variables nearer to the main root of the tree are usually the most 
+# important ones, as in this case. The three most important variables
+# for the decision tree are ST_Slope, ChestPainType and OldPeak.
+```
+
+
+Let's predict using the decision tree:
+```{r}
+dtPred <- predict(dtFit, testing, type = "class")
+
+dtProb <- predict(dtFit, testing, type = "prob")
+threshold = best_threshold
+dtPred = rep("Disease", nrow(testing))
+dtPred[which(dtProb[,2] > threshold)] = "Not_disease"
+CM = confusionMatrix(factor(dtPred), testing$HeartDisease)$table
+CM
+sum(diag(CM))/sum(CM) # Accuracy
+CM[1,1]/sum(CM[1,]) #Precision
+CM[2,2]/sum(CM[,2]) # Specificity
+CM[1,1]/sum(CM[,1]) # Sensitivity
+```
+
+
+
+Although this is not a very complicated model the results are not bad, yet it can be improved by using most sophisticated methods, which is what  we are going to do later with random forest. 
+Before that, let's do another decision tree using caret:
+```{r}
+caret.fit <- train(model, 
+                   data = training, 
+                   method = "rpart", metric = "Accuracy",
+                   control=rpart.control(minsplit = 40, maxdepth = 12),
+                   trControl = trainControl(method = "repeatedcv", 
+                                            number = 5),
+                   tuneLength=10)
+caret.fit
+caret.fit$finalModel$variable.importance
+# It seems that the variable ST_Slope is by far the most important to classify
+
+# Plot
+rpart.plot(caret.fit$finalModel)
+```
+ This is really curious, it is classifying just taking into account the  ST_Slope variable. If the patient has ST_Slope = Up it is classify as "no disease", but if it has Down or Flat it is classify as "Disease".
+ It is a very simple classification, but let's see how are the results.
+ 
+ Is it true that the majority of observations with 'Up' in the variable 
+ ST_Slope are 'Not_disease'?
+
+```{r}
+sum(data$HeartDisease[data$ST_Slope=="Up"] == "Not_disease")/sum(data$ST_Slope=="Up")
+sum(data$HeartDisease[data$ST_Slope=="Up"] == "Not_disease")/sum(data$HeartDisease=="Not_disease")
+# 79.8% of people with ST_Slope=="Up" are also healthy ('not disease') and
+# 77% of healthy people have ST_Slope == "Up".
+
+# Wow, this is something that we did not notice until now but it is extremely
+# relevant for our study. We could make a decent model just using ST_Slope variable as a predictor
+```
+Prediction using this  model:
+```{r}
+dtProb <- predict(caret.fit, testing, type = "prob")
+threshold = best_threshold
+dtPred = rep("Disease", nrow(testing))
+dtPred[which(dtProb[,2] > threshold)] = "Not_disease"
+CM = confusionMatrix(factor(dtPred), testing$HeartDisease)$table
+CM
+sum(diag(CM))/sum(CM) # Accuracy
+CM[1,1]/sum(CM[1,]) #Precision
+CM[2,2]/sum(CM[,2]) # Specificity
+CM[1,1]/sum(CM[,1]) # Sensitivity
+# The results are similar as in the previous case. Sensitivity is a bit
+# higher at the cost of losing specificity and a bit of accuracy. 
+
+```
+
+
+
+## A benchmark model
+With what have just seen now, we can create a benchamrk model that can be a good reference for us.
+Suppose we predict ST_Slope == "Up" as Not disease and we don't do anything more. Would this model be good?
+```{r}
+(sum(testing$HeartDisease[testing$ST_Slope=="Up"] == "Not_disease")+
+  sum(testing$HeartDisease[testing$ST_Slope=="Down"] == "Disease")+
+  sum(testing$HeartDisease[testing$ST_Slope=="Flat"] == "Disease"))/nrow(testing)
+# Our benchmark model is very good, probably this would be the best model
+# with noisy datasets.
+```
+
+## Random forest
+```{r}
+rf.train <- randomForest(HeartDisease ~., data=training,ntree=200,mtry=10,
+                         cutoff=c(0.49,0.51),importance=TRUE, do.trace=T)
+# mtry: number of variables randomly sampled as candidates at each split
+# ntree: number of trees to grow
+# cutoff: cutoff probabilities in majority vote. It is a vector of length equal to number of classes. The `winning' class for an observation is the one with the maximum ratio of proportion of votes to cutoff. Default is 1/k where k is the number of classes.
+```
+
+Prediction:
+```{r}
+rf.pred <- predict(rf.train, newdata=testing)
+CM <-confusionMatrix(rf.pred, testing$HeartDisease)
+CM$overall[1] # Accuracy
+CM$byClass[1] # Sensitivity
+CM$byClass[2] #Specificity
+```
+This results are quite good. We have a high sensitivity and still 
+ we have a good performance in terms of accuracy and specificity. These results are very similar to the ones obtained with the first decision tree we made.
+
+
+
+
+Let's try to find the best hyperparameters (mtry and ntree) for our random forest we create the matrix with all possible parameter combinations (of ntree and mtry).
+
+- ntree: number of trees. We want enough trees to stabalize the error but using too many trees is unncessarily inefficient, especially when using large data sets.
+
+- mtry: the number of variables to randomly sample as candidates at each split. 
+
+ We are going to use kfold cross validation:
+```{r}
+nrep = 10
+splits = replicate(nrep,sample.split(data$HeartDisease, SplitRatio = 0.8), simplify = FALSE)
+
+# We make an initial random Forest model using default parameters and 
+# check the error evolution with the number of trees:
+classifier = randomForest(formula=HeartDisease ~.,data=data)
+plot(classifier)
+# The performance of the model doesn't improve very much with more than 
+# 250 trees
+d_mtry=seq(from=2,to=11,by=1)
+d_ntree=seq(from=100,to=250,by=50)
+parametros2=expand.grid(mtry=d_mtry,ntree=d_ntree)
+```
+
+
+ We are going to do a training process inside a repeated validation process to find the best combination:
+
+```{r}
+cv_hyper2 = apply(parametros2,1,function(y){
+  
+  cv = lapply(splits, function(x) {
+    # Select training and test set according to current split
+    training_set = subset(data, x == TRUE)
+    test_set = subset(data, x == FALSE)
+    classifier = randomForest(formula=HeartDisease ~.,
+                              data=training_set,
+                              mtry = y[1],
+                              ntree = y[2]
+    )
+    
+    # Use the function predict to apply the classification algorithm
+    # with test set
+    pred = predict(classifier,test_set,type="class")
+    # Compute the confusion matrix
+    conf_matrix = table(test_set$HeartDisease,pred,dnn=c("Actual value","Classifier prediction"))
+    conf_matrix_prop = prop.table(conf_matrix)
+    
+    # Compute error estimates
+    accuracy = sum(diag(conf_matrix))/sum(conf_matrix)
+    sensitivity = conf_matrix[1,1]/sum(conf_matrix[1,])
+    specificity = conf_matrix[2,2]/sum(conf_matrix[2,])
+    return(c(accuracy,sensitivity,specificity))
+  })
+  cv = t(matrix(unlist(cv),nrow=3))
+  accuracies = apply(X=cv,MARGIN=2,FUN = "mean")  
+  
+  return(accuracies)
+  
+})
+
+# Matrix cv_hyper2 contains the three mean quality parameters for each combination 
+# of hyper parameters. We establish row names
+rownames(cv_hyper2)=c('Accuracy','Sensitivity','Specificity')
+
+# The higher accuracy, sensitivity and specificity corresponds to:
+cv_hyper2[1,which.max(cv_hyper2[1,])]
+##  Accuracy 
+## 0.86
+cv_hyper2[2,which.max(cv_hyper2[2,])]
+## Sensitivity 
+## 0.88
+cv_hyper2[3,which.max(cv_hyper2[3,])]
+## Specificity 
+##   0.83
+
+# At positions
+which.max(cv_hyper2[1,])
+which.max(cv_hyper2[2,])
+which.max(cv_hyper2[3,])
+
+bestpos = which.max(cv_hyper2[1,][cv_hyper2[2,]>0.85]) 
+# Which has the higher accuracy 
+# among those with sensitivity >0.85.
+bestpos
+
+# This are the best hyperparameters:
+parametros2[bestpos,]
+```
+
+Before we test the performance of the model, let's see how the performance of the model changes with respect to the hyperparameters we select:
+
+```{r}
+auxdata = data.frame(Values=c(cv_hyper2[1,],cv_hyper2[2,],cv_hyper2[3,]),
+                     Parameters=c(rep('Accuracy',length(cv_hyper2[1,])),
+                                  rep('Sensitivity',length(cv_hyper2[1,])),
+                                  rep('Specificity',length(cv_hyper2[1,]))),
+                     Hyperparameters=rbind(parametros2,parametros2,parametros2))
+auxdata$Parameters=as.factor(auxdata$Parameters)
+
+ggplot(data=auxdata)+aes(x=Hyperparameters.mtry,y=Values,color=as.factor(Hyperparameters.ntree))+
+  geom_point()+geom_line()+facet_wrap(Parameters~.)+
+  labs(title="Fitness parameters",x="Mtry",color="ntree")+
+  theme(plot.title=element_text(size=25,hjust=0.5),text=element_text(size=20))
+# We see that our model predicts worse with a higher value for mtry.
+```
+
+So the performance of the random forest with the best combinations of ntree and mtry is:
+```{r}
+bestclassifier = randomForest(formula=HeartDisease ~.,
+                              data=training,
+                              mtry = parametros2[bestpos,1],
+                              ntree = parametros2[bestpos,2])
+pred = predict(bestclassifier,testing,type="class")
+CM <-confusionMatrix(pred, testing$HeartDisease)
+CM$overall[1] # Accuracy
+CM$byClass[1] # Sensitivity
+CM$byClass[2] #Specificity
+# The results are really really good. We have obtained the biggest accuracy
+# so far with a sensitivity over 90% and a high specificity as well.
+```
+
+Variable importance:
+```{r}
+plot(bestclassifier$importance,
+     xaxt="n",
+     xlab="Variable",ylab="Importance"
+)
+title("Variable importance")
+axis(side=1, 
+     at=seq(1, length(bestclassifier$importance), by=1),
+     labels = row.names(bestclassifier$importance),
+)
+grid()
+# As we can expect, specially ST_Slope and also ChestPainType are the most 
+# significant variables for our model,which coincides also with the decision tree.
+```
+
+But sometimes, the threshold in the Bayes rule is more important than hyper-parameters in the ML tools:
+
+```{r}
+threshold = best_threshold
+rfProb = predict(bestclassifier, newdata=testing, type="prob")
+rfPred = rep("Disease", nrow(testing))
+rfPred[which(rfProb[,2] > threshold)] = "Not_disease"
+CM = confusionMatrix(factor(rfPred), testing$HeartDisease)$table
+CM
+sum(diag(CM))/sum(CM) # Accuracy
+CM[1,1]/sum(CM[1,]) #Precision
+CM[2,2]/sum(CM[,2]) # Specificity
+CM[1,1]/sum(CM[,1]) # Sensitivity
+# In this case, the results obtained using the threshold (with posterior probabilities) and the ones using the classical method are similar (very good both).
+```
+
+CONCLUSION: 
+Although more sophisticated and computational complex techniques usually give better results, this is not always the case. For example, we have seen how increasing the number of trees does not always improve the random forest, or how the decision tree that only used one variable to classify gave us similar results as other models much more complex.
+Not always the most complex model is the best. We have seen how finding the best possible combination of hyperparameters for the random forest is very time-demanding  and does not give us much more better results. I would say that in the case of this dataset, probably using logistic regression or a decision tree would be the best choices in terms of cost and performance.
+
+
+## Regression
+I have been trying to select one of the numerical variables that I already have as the variable to predict, but all my numerical variables in the dataset have almost no correlation between them. I tried some different models and none of them can predict any of the variables. They are all indepedent to each other. Therefore, I am going to create a new variable to predict. It is going to be a mark of the patient Health results.
+
+
+The formula to calculate this new variable is going to be: -Resting BP (the less, the better, that is why it has negative sign) multiplied by the Cholesterol times 10 (times 10 is because it is the most significant variable to meassure the health of the patient), and plus the the max Heart rate minus the age plus one and squared. The recommended Heart Rate for a person of age x is 220-x, therefore values like 210 or 190 would be fine for a 20-years-old person, but 160 or 250 would be terrible values. That is why I square the result, in order to make always positive the difference between the recommenden heart rate and the actual heart rate. The plus one is to having a number >1 when we square. We will add a random number at the end that will act as the error
+
+```{r}
+data$Health = 0
+for(i in 1:nrow(data)){
+  data[i,13] = -data[i,4]-3*data[i,5]+ (data[i,8]-data[i,1])^2+runif(1, min=-3, max=3)
+}
+```
+
+Correlation of our numerical variables:
+```{r}
+ggcorr(data, label = T) # Automatically ignores variable that are not numerical
+# Our variable of interest is highly correlated to Cholesterol.
+
+# Let's see it in a way we see the correlation of the numerical variables
+# against the variable of interest in order.
+# Which are the most correlated variables with Resting BP?
+corr_resting <- sort(cor(data[,c(1,4,5,8,10,13)])["Health",], decreasing = T)
+corr=data.frame(corr_resting)
+ggplot(corr,aes(x = row.names(corr), y = corr_resting)) + 
+  geom_bar(stat = "identity", fill = "lightblue") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "Predictors", y = "Health", title = "Correlations") + 
+  theme(plot.title = element_text(hjust = 0, size = rel(1.5)),
+        axis.text.x = element_text(angle = 55, hjust = 1))
+# Apart from CHolesterol, there is not any variable with a significant correlation to the variable of interest.
+```
+
+Let's create a new training and test set for this part:
+```{r}
+in_train <- createDataPartition(data$Health, p = 0.75, list = FALSE)  # 75% for training
+training <- data[ in_train,]
+testing <- data[-in_train,]
+```
+
+### Simple linear regression
+Using just the most correlated variable
+```{r}
+linFit <- lm(Health ~ Cholesterol, data=training)
+summary(linFit)
+# Around 0.35-0.40 R-squared. Not really good, which is normal by the way because we are only considering one variable.
+```
+
+### Multiple linear regression
+```{r}
+# Let's try with all the numerical variables
+linFit <- lm(Health ~ Age + Cholesterol + MaxHR + Oldpeak+RestingBP, data=training)
+summary(linFit)
+# We have a medium-low value of R-squared, this is, our model doesn't predict very well.
+
+linFit <- lm(Health~., data=training)
+summary(linFit)
+# Similar results as before (which is normal, because we know the formula and the rest of the variables do not participe in the formula of Health).
+```
+
+
+ Let's try to change a bit our model by looking first how is the relation of our variables. Probably, our model is not doin it good because the relation between our variables is nor lineal.
+
+```{r}
+ggplot(training, aes(x=Age, y=Health)) + ylab("Resting BP") + geom_point(alpha=0.6) + ggtitle("")
+# Sometimes including geom_smooth help us to see non-linear relations:
+ggplot(training) +aes(x=Age,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+# We can see that this does not follow a linear relation.It is more quadratic.
+ggplot(training) +aes(x=Age^2,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+
+ggplot(training, aes(x=MaxHR, y=Health)) + ylab("Resting BP") + geom_point(alpha=0.6) + ggtitle("")
+# Here we have another clear quadratic relation.
+ggplot(training) +aes(x=MaxHR^2,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="lm",se=F) 
+
+ggplot(training) +aes(x=RestingBP,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+ggplot(training) +aes(x=RestingBP,y=Health/10) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+# Not a very clear linear or quadratic relation here.
+
+ggplot(training) +aes(x=Cholesterol,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+  # Clearly there is a negative linear relation. 
+# As the variability is not very constant, we can include a logarithm.
+ggplot(training) +aes(x=log(Cholesterol+20),y=log(Health+20)) + geom_point() + 
+  geom_smooth(formula="y~x",method="lm",se=F)
+# Strong linear relation
+ggplot(training) +aes(x=Oldpeak,y=Health) + geom_point() + 
+  geom_smooth(formula="y~x",method="loess",se=F)
+# Regression line does not fit. By looking at the graph we may conclude 
+# that we shouldn't take into account this variable for our linear model
+```
+
+
+Let's repeat the multiple regression after what we have seen in the graphs:
+```{r}
+linFit <- lm(Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP+Oldpeak, data=training)
+summary(linFit)
+
+
+pr.multiple = predict(linFit, newdata=testing)
+cor(testing$Health, pr.multiple)^2
+
+# We can see that we have improved significantly the results with repect to the previous model, which was just:
+linFit <- lm(Health ~ Age + Cholesterol + MaxHR + Oldpeak+RestingBP, data=training)
+summary(linFit)
+
+
+```
+### MODEL SELECTION:
+Are all the variables needed to predict?
+Objective: To identify the subset of the p variables that is really associated to the response
+
+```{r}
+model = Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP+Oldpeak
+
+linFit <- lm(model, data=training)
+
+ols_step_all_possible(linFit) 
+# All possible subset regressions: the number is exponential with p 
+# We have 2^p combinations of the predictors.
+```
+We have to see which is the combination with better results (in terms
+ of R^2, AIC, BIC...)
+The 26th (I(Age^2) log(Cholesterol + 20) I(MaxHR^2) RestingBP) and the 31st (I(Age^2) log(Cholesterol + 20) I(MaxHR^2) RestingBP Oldpeak)  combinations are the ones with better results. 
+ From this we can conclude that maybe Oldpeak is not very important to make our predictions,because the results doens't change much when this variable is incorporated to the model,  while including or not the rest of the variables affects much more the performance.
+
+
+```{r}
+ols_step_best_subset(linFit) 
+# The best subset regression for each p. 
+```
+
+ We can see again that the combination of I(Age^2) log(Cholesterol + 20) I(MaxHR^2) RestingBP is the one with better results (lowest Akaike information criterion (AIC), lowest Bayesian information criterio (BIC) and the highest Rsquared alogn with the model that includes variable Oldpeak). Again, we can conclude that we shouldn't consider variable Oldpeak in our model, because it makes it more complex but doesn't improve the performance.
+
+
+
+Visualizating the results we can see it clearer:
+```{r}
+plot(ols_step_best_subset(linFit)) 
+# We can observe that the performance of our model improves everytime we incorporate a new variable until 4, but then when we include the fifth variable (Oldpeak), the model does not improve the results.
+```
+
+Backward elimination and stepwise selection
+```{r}
+# The backward elimination technique is used in machine learning to find the best subset of features from a given set of features. 
+
+# It works by iteratively removing features that are not predictive of the target variable or have the least predictive power
+ols_step_backward_aic(linFit) # backward AIC
+# This also confirms what we have seen before.
+ols_step_both_aic(linFit) # stepwise AIC
+```
+With all these results, we can come to the conclusion that a good model for use would be:
+```{r}
+linFit <- lm(Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP, data=training)
+summary(linFit)
+
+predictions <- predict(linFit, newdata=testing)
+cor(testing$Health, predictions)^2
+# This model seems good and give us nice results in the test set as well
+
+```
+
+**Benchmark model**
+```{r}
+mean(training$Health)
+# This is equivalent to
+benchFit <- lm(Health ~ 1, data=training)
+benchFit$coefficients
+
+predictions <- predict(benchFit, newdata=testing)
+RMSE <- sqrt(mean((predictions - testing$Health)^2))
+# Well, the benchmark model is quite good (taking into account that it is very simple).
+```
+### Statistical Learning tools
+```{r}
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 5, repeats=1)
+
+# We previously had the doubt whether to include Oldpeak in the model or not, so we are going to create to models and compare the results:
+ModelS = Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP
+
+ModelF = Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP+Oldpeak
+
+test_results <- data.frame(Health = testing$Health)
+```
+
+
+
+### Visualization of the Linear regression
+```{r}
+lm_tune <- train(ModelS, data = training, 
+                 method = "lm", 
+                 preProc=c('scale', 'center'),
+                 trControl = ctrl)
+lm_tune
+
+# Predict
+test_results$lm <- predict(lm_tune, testing)
+postResample(pred = test_results$lm,  obs = test_results$Health)
+```
+
+Visualization
+```{r}
+qplot(test_results$lm, test_results$Health) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed")  +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+In the grpahs we can see that the results are very good. As the axis of the grpahs are the predicted value and the actual value, the point in the diagonal are perfect predictions. As the majority of our points are around the diagonal, we can conclude that the model is good.
+
+
+### Overfitted linear regression
+Train
+```{r}
+alm_tune <- train(ModelF, data = training, 
+                  method = "lm", 
+                  preProc=c('scale', 'center'),
+                  trControl = ctrl)
+```
+
+Predict
+```{r}
+test_results$alm <- predict(alm_tune, testing)
+postResample(pred = test_results$alm,  obs = test_results$Health)
+```
+Visualization
+```{r}
+qplot(test_results$alm, test_results$Health) + 
+  labs(title="Linear Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+In this case our results have not improve after training the model (they are almost the same as before), and does not seem that we have an overfitted model. However, although it is  positive to train your model in order to achieve the best possible performance, we have to be careful about overfitting. It may be possible that our model has less bias, but increases variance a lot. We always have to be careful and concern about it.
+
+## Backward regression
+```{r}
+back_tune  <- train(ModelF, data = training, 
+                  method = "leapBackward", 
+                  tuneGrid = expand.grid(nvmax = 2:5),
+                  trControl = ctrl)
+
+back_tune
+plot(back_tune)
+```
+Remember that the lower RMSE the better. So in this case using 4 variables to predict would be the best option. Inlsuding a fifth variable doesn't improve the performance of the model.
+
+
+Which variables are selected?
+```{r}
+coef(back_tune$finalModel, back_tune$bestTune$nvmax)
+```
+We always arrive to the same conclusion, we should leave Oldpeak variable out of our model.
+
+Predict
+```{r}
+test_results$frw <- predict(back_tune, testing)
+postResample(pred = test_results$frw,  obs = test_results$Health)
+```
+
+Visualization
+```{r}
+qplot(test_results$frw, test_results$Health) + 
+  labs(title="Backward Regression Observed VS Predicted", x="Predicted", y="Observed") +
+  geom_abline(intercept = 0, slope = 1, colour = "blue") +
+  theme_bw()
+```
+
+
+## KNN
+```{r}
+modelLookup('kknn')
+# 3 hyper-parameters: kmax, distance, kernel
+# kmax: number of neighbors considered
+# distance: parameter of Minkowski distance (p in Lp)
+# kernel: "rectangular" (standard unweighted knn), "triangular", "epanechnikov" (or beta(2,2)), "biweight" (or beta(3,3)), "tri- weight" (or beta(4,4)), "cos", "inv", "gaussian", "rank" and "optimal".
+```
+
+
+```{r}
+knn_tune <- train(ModelS, 
+                  data = training,
+                  method = "kknn",   
+                  preProc=c('scale','center'),
+                  tuneGrid = data.frame(kmax=c(11,13,15,19,21),distance=2,kernel='optimal'),
+                  trControl = ctrl)
+plot(knn_tune)
+
+```
+
+```{r}
+test_results$knn <- predict(knn_tune, testing)
+
+postResample(pred = test_results$knn,  obs = test_results$Health)
+```
+In general, we can see that we obtain similar results with all the models. This resuls are also good.
+
+## Random Forest
+```{r}
+rf_tune <- train(ModelS, 
+                 data = training,
+                 method = "rf",
+                 preProc=c('scale','center'),
+                 trControl = ctrl,
+                 ntree = 100,
+                 tuneGrid = data.frame(mtry=c(1,2,2,4)),
+                 importance = TRUE)
+
+plot(rf_tune)
+```
+
+```{r}
+test_results$rf <- predict(rf_tune, testing)
+
+postResample(pred = test_results$rf,  obs = test_results$Health)
+```
+
+```{r}
+plot(varImp(rf_tune, scale = F), scales = list(y = list(cex = .95)))
+```
+
+As we know the formula that we used to create the variable to predict, we can see that these results are very accurate. In the formula we made Cholesterol the most important variable to predict, and RestingBP the one with less influence, and this is exactly what we can see in this graph.
+
+
+**Final conclusion**
+
+I tried to make all the part of regression as if I didn't know what was the formula of the dependent variable, and in the end I think I arrive to a model very similar to the hypothethical best model.
+
+My final model was: Health ~ I(Age^2) + log(Cholesterol+20) + I(MaxHR^2) +RestingBP
+
+And the best possible model (knowing the formula) would be: Health ~ I(-RestingBP) + I(3*Cholesterol) + I((MaxHR-Age)^2)
+
+So we succesfully found which were the variables involved (we left Oldpeak out), and also find out which were the most important variables. We arrived to a model very similar to the best possible one and that could predict very good the variable of interest.
+
+
+
+
+# Sources:
+I took the dataset from an exam of last year of introduction to data science.
+
+ https://www.statmethods.net/
+ 
+ https://r-graph-gallery.com/  
+ 
+ https://r-coder.com/
+ 
+ http://www.sthda.com/english/articles/36-classification-methods-essentials/149-penalized-logistic-regression-essentials-in-r-ridge-lasso-and-elastic-net/
+ 
+ https://www.rdocumentation.org/
+ 
+ My notes of classification from last year.
+ 
+ The presentations and examples available in aulaglobal.
+ 
+ https://www.investopedia.com/terms/s/stepwise-regression.asp#:~:text=Stepwise%20regression%20is%20the%20step,statistical%20significance%20after%20each%20iteration. 
+ 
+ https://www.cdc.gov/bloodpressure/about.htm#:~:text=%2F80%20mmHg.%E2%80%9D-,What%20are%20normal%20blood%20pressure%20numbers%3F,less%20than%20120%2F80%20mmHg.&text=No%20matter%20your%20age%2C%20you,pressure%20in%20a%20healthy%20range. 
